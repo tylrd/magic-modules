@@ -161,6 +161,51 @@ func TestBuildVCRTestRowsNightlyStatus(t *testing.T) {
 	}
 }
 
+func TestNightlyEvidence(t *testing.T) {
+	history := map[string]*NightlyTestHistory{
+		"TestAccLinked": {
+			Passes:   28,
+			Failures: 2,
+			FailureRuns: []NightlyTestRun{
+				{Date: "2026-09-27", LogLink: "https://logs/1.txt"},
+				{Date: "2026-09-28", LogLink: "https://logs/2.txt"},
+			},
+		},
+		"TestAccTruncated": {
+			Passes:      2,
+			Failures:    28,
+			FailureRuns: []NightlyTestRun{{Date: "2026-09-28", LogLink: "https://logs/3.txt"}},
+		},
+		"TestAccNoLink": {
+			Passes:      29,
+			Failures:    1,
+			FailureRuns: []NightlyTestRun{{Date: "2026-09-28"}},
+		},
+		"TestAccClean":  {Passes: 30},
+		"TestAccNoRuns": {},
+		"TestAccParent": {
+			Passes:      29,
+			Failures:    1,
+			FailureRuns: []NightlyTestRun{{Date: "2026-09-28", LogLink: "https://logs/4.txt"}},
+		},
+	}
+
+	cases := map[string]string{
+		"TestAccLinked":       "[2026-09-27](https://logs/1.txt), [2026-09-28](https://logs/2.txt)",
+		"TestAccTruncated":    "latest 1: [2026-09-28](https://logs/3.txt)",
+		"TestAccNoLink":       "2026-09-28",
+		"TestAccClean":        "",
+		"TestAccNoRuns":       "",
+		"TestAccMissing":      "",
+		"TestAccParent__sub1": "[2026-09-28](https://logs/4.txt)",
+	}
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, want, nightlyEvidence(lookupNightlyHistory(name, history)))
+		})
+	}
+}
+
 func TestNightlyDetail(t *testing.T) {
 	history := map[string]*NightlyTestHistory{
 		"TestAccAlways":  {Failures: 30},
@@ -201,29 +246,42 @@ func TestNightlyDetail(t *testing.T) {
 	assert.Equal(t, "67% of 30", nightlyDetail(noDate, NightlyStatusRecentlyFixed))
 }
 
+func TestNightlyTestUrl(t *testing.T) {
+	assert.Equal(t,
+		"https://hashicorp.teamcity.com/test/6946391424746324317?currentProjectId=TerraformProviders_GoogleCloud_GOOGLE_BETA_NIGHTLYTESTS",
+		nightlyTestUrl("6946391424746324317", provider.Beta))
+	assert.Equal(t,
+		"https://hashicorp.teamcity.com/test/123?currentProjectId=TerraformProviders_GoogleCloud_GOOGLE_NIGHTLYTESTS",
+		nightlyTestUrl("123", provider.GA))
+	// Histories collected before test ids were captured must not render a broken link.
+	assert.Equal(t, "", nightlyTestUrl("", provider.Beta))
+}
+
 func TestRecordReplayNightlyColumn(t *testing.T) {
 	data := recordReplay{
 		TestRows: []VCRTestTableRow{
-			{DisplayName: "TestAcc_a", RecordingStatus: "Failed", ReplayingAfterRecordingStatus: "-", NightlyStatus: NightlyStatusFailing, NightlyDetail: "100% of 25"},
+			{DisplayName: "TestAcc_a", RecordingStatus: "Failed", ReplayingAfterRecordingStatus: "-", NightlyStatus: NightlyStatusFailing, NightlyDetail: "100% of 25", NightlyEvidence: "latest 2: [2026-09-27](https://logs/a1.log), [2026-09-28](https://logs/a2.log)", NightlyTestUrl: "https://hashicorp.teamcity.com/test/99"},
 			{DisplayName: "TestAcc_b", RecordingStatus: "Failed", ReplayingAfterRecordingStatus: "-", NightlyStatus: NightlyStatusPassing, NightlyDetail: "0% of 30"},
 			{DisplayName: "TestAcc_c", RecordingStatus: "Failed", ReplayingAfterRecordingStatus: "-", NightlyStatus: NightlyStatusRecentlyFixed, NightlyDetail: "last failed 2026-09-27"},
 		},
-		RecordingResult:      vcr.Result{FailedTests: []string{"TestAcc_a", "TestAcc_b", "TestAcc_c"}},
-		HasNightlyHistory:    true,
-		NightlyKnownFailures: 1,
-		Version:              provider.Beta.String(),
-		Head:                 "auto-pr-123",
-		LogBucket:            "ci-vcr-logs",
+		RecordingResult:       vcr.Result{FailedTests: []string{"TestAcc_a", "TestAcc_b", "TestAcc_c"}},
+		HasNightlyHistory:     true,
+		NightlyKnownFailures:  1,
+		NightlyTestHistoryUrl: nightlyTestHistoryUrl(provider.Beta),
+		Version:               provider.Beta.String(),
+		Head:                  "auto-pr-123",
+		LogBucket:             "ci-vcr-logs",
 	}
 	got, err := formatRecordReplay(data, new(strings.Builder))
 	assert.NoError(t, err)
 	assert.Contains(t, got, "| Recording Mode | Replaying Rerun | Nightly | Test Name |")
 	// Each cell stays on one line so rows do not grow tall when many tests fail.
-	assert.Contains(t, got, "| ❌ | - | ⚪ Fails · 100% of 25 | TestAcc_a |")
+	assert.Contains(t, got, "| ❌ | - | ⚪ Fails · 100% of 25 · latest 2: [2026-09-27](https://logs/a1.log), [2026-09-28](https://logs/a2.log) | [TestAcc_a](https://hashicorp.teamcity.com/test/99) |")
 	// Healthy in nightly, so this failure most likely belongs to the PR.
 	assert.Contains(t, got, "| ❌ | - | 🔴 Passes · 0% of 30 | TestAcc_b |")
 	assert.Contains(t, got, "| ❌ | - | 🔴 Fixed · last failed 2026-09-27 | TestAcc_c |")
 	assert.Contains(t, got, "**Known Nightly Failures**: 1 of the tests")
+	assert.Contains(t, got, "[nightly test history](https://storage.cloud.google.com/nightly-test-data/nightly-test-history/beta/nightly-test-history.json)")
 
 	data.HasNightlyHistory = false
 	data.NightlyKnownFailures = 0

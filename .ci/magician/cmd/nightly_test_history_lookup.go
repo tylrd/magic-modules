@@ -128,6 +128,22 @@ func classifyNightlyStatus(h *NightlyTestHistory, historyEndDate string) string 
 	return NightlyStatusPassing
 }
 
+// nightlyTestHistoryUrl links to the rolling history file backing the nightly column.
+func nightlyTestHistoryUrl(pVersion provider.Version) string {
+	return fmt.Sprintf("https://storage.cloud.google.com/%s/%s", nightlyDataBucket, nightlyTestHistoryObjectName(pVersion))
+}
+
+// nightlyTestUrl links to a single test's history page in the TeamCity nightly project, where the
+// reviewer can see every recent nightly run of that test. testNameId is TeamCity's internal
+// cross-build test identifier; it cannot be derived from the test name, so it is captured when the
+// nightly history is collected.
+func nightlyTestUrl(testNameId string, pVersion provider.Version) string {
+	if testNameId == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://hashicorp.teamcity.com/test/%s?currentProjectId=%s", testNameId, pVersion.TeamCityNightlyProjectName())
+}
+
 // lookupNightlyHistory finds the history entry for a test name. The name may be a VCR
 // subtest name (Parent__sub); the parent test is used as a fallback.
 func lookupNightlyHistory(testName string, history map[string]*NightlyTestHistory) *NightlyTestHistory {
@@ -135,6 +151,29 @@ func lookupNightlyHistory(testName string, history map[string]*NightlyTestHistor
 		return h
 	}
 	return history[compoundTest(testName)]
+}
+
+// nightlyEvidence links each recent nightly failure to its debug log, e.g.
+// "2026-09-27, 2026-09-28", so a reviewer can open the exact runs the status was derived from.
+// The counts themselves live in nightlyFailureRate.
+func nightlyEvidence(h *NightlyTestHistory) string {
+	if h == nil || len(h.FailureRuns) == 0 {
+		return ""
+	}
+
+	dates := make([]string, 0, len(h.FailureRuns))
+	for _, run := range h.FailureRuns {
+		if run.LogLink == "" {
+			dates = append(dates, run.Date)
+			continue
+		}
+		dates = append(dates, fmt.Sprintf("[%s](%s)", run.Date, run.LogLink))
+	}
+	// The history keeps only the most recent failures, so say so rather than implying it is complete.
+	if h.Failures > len(h.FailureRuns) {
+		return fmt.Sprintf("latest %d: %s", len(dates), strings.Join(dates, ", "))
+	}
+	return strings.Join(dates, ", ")
 }
 
 // nightlySymbol renders a nightly status for the PR comment table.
@@ -185,14 +224,18 @@ func nightlyDetail(h *NightlyTestHistory, status string) string {
 	return fmt.Sprintf("%d%% of %d", percent, runs)
 }
 
-// nightlyCell renders the nightly column as a single line: a status label and the detail backing it.
+// nightlyCell renders the nightly column on a single line so rows stay compact when a PR has many
+// failures: a status label, the detail backing it, and links to each recent failure's debug log.
 func nightlyCell(row VCRTestTableRow) string {
 	if row.NightlyStatus == "" {
 		return ""
 	}
-	label := nightlySymbol(row.NightlyStatus)
-	if row.NightlyDetail == "" {
-		return label
+	parts := []string{nightlySymbol(row.NightlyStatus)}
+	if row.NightlyDetail != "" {
+		parts = append(parts, row.NightlyDetail)
 	}
-	return fmt.Sprintf("%s · %s", label, row.NightlyDetail)
+	if row.NightlyEvidence != "" {
+		parts = append(parts, row.NightlyEvidence)
+	}
+	return strings.Join(parts, " · ")
 }

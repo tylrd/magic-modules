@@ -87,6 +87,11 @@ type VCRTestTableRow struct {
 	NightlyStatus string
 	// NightlyDetail is the short parenthetical shown next to NightlyStatus in the table.
 	NightlyDetail string
+	// NightlyEvidence summarizes the nightly runs backing NightlyStatus, linking each recent
+	// failure to its debug log.
+	NightlyEvidence string
+	// NightlyTestUrl links the test name to its nightly history page in TeamCity.
+	NightlyTestUrl string
 }
 
 type recordReplay struct {
@@ -107,6 +112,7 @@ type recordReplay struct {
 	NotRunGATests                 []string
 	HasNightlyHistory             bool
 	NightlyKnownFailures          int
+	NightlyTestHistoryUrl         string
 }
 
 var testTerraformVCRCmd = &cobra.Command{
@@ -401,6 +407,7 @@ func execTestTerraformVCR(prNumber, mmCommitSha, buildID, projectID, buildStep, 
 		recordReplayData := recordReplay{
 			HasNightlyHistory:             nightlyHistory != nil,
 			NightlyKnownFailures:          nightlyKnownFailures,
+			NightlyTestHistoryUrl:         nightlyTestHistoryUrl(provider.Beta),
 			TestRows:                      testRows,
 			RecordingResult:               expandedRecordingResult,
 			ReplayingAfterRecordingResult: expandedReplayingAfterRecordingResult,
@@ -869,6 +876,10 @@ func buildVCRTestRows(replayingResult, recordingResult, replayingAfterRecordingR
 			h := lookupNightlyHistory(t, nightlyHistory.Tests)
 			row.NightlyStatus = classifyNightlyStatus(h, nightlyHistory.EndDate)
 			row.NightlyDetail = nightlyDetail(h, row.NightlyStatus)
+			row.NightlyEvidence = nightlyEvidence(h)
+			if h != nil {
+				row.NightlyTestUrl = nightlyTestUrl(h.TestNameId, provider.Beta)
+			}
 		}
 		testRows = append(testRows, row)
 	}
